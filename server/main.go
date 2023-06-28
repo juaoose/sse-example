@@ -4,12 +4,25 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 )
 
 func main() {
-	http.HandleFunc("/", streamHandler)
-	http.ListenAndServe(":80", nil)
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		defer wg.Done()
+		streamHandler(w, r)
+	})
+
+	go func() {
+		http.ListenAndServe(":80", nil)
+	}()
+
+	wg.Wait()
+	log.Println("Application finished")
 }
 
 func streamHandler(w http.ResponseWriter, r *http.Request) {
@@ -26,22 +39,27 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for num := 0; num < 10; num++ {
-
-		event := fmt.Sprintf("data: %d\n\n", num)
-
-		_, err := fmt.Fprint(w, event)
-		if err != nil {
-			return
+	done := make(chan bool)
+	go func() {
+		for num := 0; num < 10; num++ {
+			event := fmt.Sprintf("data: %d\n\n", num)
+			_, err := fmt.Fprint(w, event)
+			if err != nil {
+				return
+			}
+			flusher.Flush()
+			log.Println("flushing")
+			time.Sleep(time.Second)
 		}
+		done <- true
+	}()
 
-		flusher.Flush()
-		log.Println("flushing")
-
-		if num == 10 {
-			panic("we're done here")
-		}
-
-		time.Sleep(time.Second)
+	select {
+	case <-done:
+		log.Println("Streaming completed")
+	case <-r.Context().Done():
+		log.Println("Connection closed by the client")
 	}
+
+	return
 }
